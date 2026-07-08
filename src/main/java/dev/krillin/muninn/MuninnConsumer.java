@@ -20,7 +20,8 @@ import org.eclipse.tahu.message.model.SparkplugBPayload;
  * Paho v3 observer (gate harness) mirroring {@code SchemaResolvingConsumer}. Subscribes to a
  * group's Sparkplug tree, captures the NBIRTH's governed-definition bytes to {@code birthOutFile}
  * and every NDATA metric name to {@code ndataOutFile}, and counts down once a birth plus the
- * expected number of NDATA member-lines have been seen.
+ * expected number of NDATA member-lines have been seen. When an optional {@code valuesOutFile}
+ * is provided, each NDATA metric is additionally written as {@code name=value} to it.
  *
  * <p>Both out files are truncated/created empty at construction so a prior run's captures can
  * NEVER leak into this run's assertions. The synchronous {@code subscribe} + a flushed readiness
@@ -46,7 +47,8 @@ public final class MuninnConsumer implements MqttCallback {
         this.valuesOutFile = valuesOutFile;
         this.expectNdata = expectNdata;
 
-        // Truncate/create both capture files empty so no prior run leaks in.
+        // Truncate/create all capture files empty so no prior run leaks in
+        // (the opt-in values file only when it is set).
         Files.write(birthOutFile, new byte[0]);
         Files.write(ndataOutFile, new byte[0]);
         if (valuesOutFile != null) {
