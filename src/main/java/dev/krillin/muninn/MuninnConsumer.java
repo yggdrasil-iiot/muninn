@@ -30,6 +30,7 @@ public final class MuninnConsumer implements MqttCallback {
 
     private final Path birthOutFile;
     private final Path ndataOutFile;
+    private final Path valuesOutFile;   // nullable: only written when the observe --ndata-values flag is set
     private final int expectNdata;
     private final CountDownLatch latch = new CountDownLatch(1);
     private final SparkplugBPayloadDecoder decoder = new SparkplugBPayloadDecoder();
@@ -39,14 +40,18 @@ public final class MuninnConsumer implements MqttCallback {
     private int ndataCount;
 
     public MuninnConsumer(String broker, String group, Path birthOutFile, Path ndataOutFile,
-            int expectNdata) throws Exception {
+            Path valuesOutFile, int expectNdata) throws Exception {
         this.birthOutFile = birthOutFile;
         this.ndataOutFile = ndataOutFile;
+        this.valuesOutFile = valuesOutFile;
         this.expectNdata = expectNdata;
 
         // Truncate/create both capture files empty so no prior run leaks in.
         Files.write(birthOutFile, new byte[0]);
         Files.write(ndataOutFile, new byte[0]);
+        if (valuesOutFile != null) {
+            Files.write(valuesOutFile, new byte[0]);
+        }
 
         MqttConnectOptions o = new MqttConnectOptions();
         o.setCleanSession(true);
@@ -57,6 +62,11 @@ public final class MuninnConsumer implements MqttCallback {
         // Readiness handshake: subscribe is synchronous, so the observer is genuinely ready here.
         System.out.println("[OBSERVE] subscribed spBv1.0/" + group + "/#");
         System.out.flush();
+    }
+
+    /** Renders an NDATA metric as {@code name=value} for the gate's value assertion. */
+    static String valueLine(Metric metric) {
+        return metric.getName() + "=" + metric.getValue();
     }
 
     @Override
@@ -95,6 +105,10 @@ public final class MuninnConsumer implements MqttCallback {
             for (Metric metric : payload.getMetrics()) {
                 Files.write(ndataOutFile, (metric.getName() + "\n").getBytes(),
                         StandardOpenOption.APPEND);
+                if (valuesOutFile != null) {
+                    Files.write(valuesOutFile, (valueLine(metric) + "\n").getBytes(),
+                            StandardOpenOption.APPEND);
+                }
                 ndataCount++;
             }
         }

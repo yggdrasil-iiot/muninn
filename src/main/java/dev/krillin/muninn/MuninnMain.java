@@ -127,6 +127,7 @@ public final class MuninnMain {
 
     private static void observe(String[] args) throws Exception {
         // observe <mqttUrl> <group> <birthOutFile> <ndataOutFile>
+        //         [--expect-ndata N] [--timeout-ms M] [--ndata-values <file>]
         if (args.length < 5) {
             usage();
             System.exit(2);
@@ -138,11 +139,14 @@ public final class MuninnMain {
 
         int expectNdata = 4;
         long timeoutMs = 20000L;
+        String valuesOutFile = null;
         for (int i = 5; i < args.length; i++) {
             if ("--expect-ndata".equals(args[i]) && i + 1 < args.length) {
                 expectNdata = Integer.parseInt(args[++i]);
             } else if ("--timeout-ms".equals(args[i]) && i + 1 < args.length) {
                 timeoutMs = Long.parseLong(args[++i]);
+            } else if ("--ndata-values".equals(args[i]) && i + 1 < args.length) {
+                valuesOutFile = args[++i];
             } else {
                 System.err.println("unknown argument: " + args[i]);
                 usage();
@@ -151,7 +155,8 @@ public final class MuninnMain {
         }
 
         MuninnConsumer consumer = new MuninnConsumer(mqttUrl, group,
-                Path.of(birthOutFile), Path.of(ndataOutFile), expectNdata);
+                Path.of(birthOutFile), Path.of(ndataOutFile),
+                valuesOutFile != null ? Path.of(valuesOutFile) : null, expectNdata);
         boolean got = consumer.awaitCapture(timeoutMs);
         consumer.close();
         System.exit(got ? 0 : 2);
@@ -162,6 +167,6 @@ public final class MuninnMain {
         System.err.println("  feed <registryDir> <ref> <version> <opcEndpoint> <nsUri> "
                 + "<instanceNodeIdent> <mqttUrl> <group> <edge> [--inject-bogus <member>]");
         System.err.println("  observe <mqttUrl> <group> <birthOutFile> <ndataOutFile> "
-                + "[--expect-ndata N] [--timeout-ms M]");
+                + "[--expect-ndata N] [--timeout-ms M] [--ndata-values <file>]");
     }
 }
