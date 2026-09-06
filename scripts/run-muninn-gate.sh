@@ -23,6 +23,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# cygpath exists only under Git Bash / Cygwin. Elsewhere a POSIX path is already what the JVM
+# wants, so shim it to identity (drop the -m, keep the last argument) rather than making every
+# call site conditional. Without this this gate only runs on Windows.
+command -v cygpath >/dev/null 2>&1 || cygpath() { printf '%s
+' "${@: -1}"; }
+
 WORK="build/gate"
 SIM_LOG="$WORK/sim.log"
 OBS_LOG="$WORK/observe.log"
