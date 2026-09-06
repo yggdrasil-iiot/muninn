@@ -1,3 +1,5 @@
+[![CI](https://github.com/yggdrasil-iiot/muninn/actions/workflows/ci.yml/badge.svg)](https://github.com/yggdrasil-iiot/muninn/actions/workflows/ci.yml)
+
 Muninn — the northbound **feeder** of the Yggdrasil IIoT governance portfolio: it consumes a *governed* equipment definition, proves the bytes it will publish are the ones governance admitted, and streams live OPC-UA instance data to a Sparkplug B / MQTT UNS. It is a separate app, coupled to the rest only by a published data/wire contract — **zero shared code** (its own value types, its own SHA-256/manifest).
 
 ## Role in the governance spine

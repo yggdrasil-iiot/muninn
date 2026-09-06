@@ -1,0 +1,26 @@
+# run-muninn-gate.sh needs a live MQTT broker, so it is not run here; a red badge should mean
+# a regression, not a container that did not come up. Run it locally.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+      - name: Build and test
+        run: mvn -B -ntp install
