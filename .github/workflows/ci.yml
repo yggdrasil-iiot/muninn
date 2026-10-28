@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Product names in ASCII
+        run: bash scripts/check-ascii-names.sh
+
       - uses: actions/setup-java@v4
         with:
           java-version: '17'

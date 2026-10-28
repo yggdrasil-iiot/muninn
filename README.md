@@ -5,10 +5,10 @@ Muninn — the northbound **feeder** of the Yggdrasil IIoT governance portfolio:
 ## Role in the governance spine
 
 ```
-Mímir (model) ──▶ Bifrost (govern) ──▶ Muninn (feed the UNS)
+Mimir (model) ──▶ Bifrost (govern) ──▶ Muninn (feed the UNS)
 ```
 
-Mímir derives a canonical UDT definition, Bifrost's gates admit + provenance-publish it, and **Muninn**:
+Mimir (Mímir) derives a canonical UDT definition, Bifrost's gates admit + provenance-publish it, and **Muninn**:
 
 1. **Provenance-verifies** the governed definition — recomputes SHA-256 over the raw registry bytes, compares to the sibling `manifest.json`, and **refuses to birth** on mismatch (no verify-one-birth-another).
 2. Emits a Sparkplug B **NBIRTH** whose `governed_definition` `Bytes` metric carries the **byte-exact** verified definition (a lossy Tahu UDT Template would not be byte-equal).
