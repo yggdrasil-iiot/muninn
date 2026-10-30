@@ -22,7 +22,7 @@ import org.eclipse.milo.opcua.stack.core.types.structured.ReferenceDescription;
 import org.eclipse.tahu.message.model.MetricDataType;
 
 /**
- * Live shell (Milo 1.0.0): FAITHFULLY sample a governed equipment INSTANCE's member
+ * Live shell (Milo 1.1.8): FAITHFULLY sample a governed equipment INSTANCE's member
  * Variables into pure {@link SampledMember} facts (name + resolved Tahu {@link MetricDataType}
  * + live value). Mirrors mimir's {@code OpcUaMixerBrowser} browse + DataType-read idioms; the
  * difference is that muninn browses an INSTANCE and additionally reads each member's live VALUE
