@@ -47,7 +47,7 @@ Exit codes: `0` ok · `1` governance-refuse (provenance mismatch) · `2` usage/e
 
 ## Dependencies
 
-Eclipse Milo 1.0.0 (OPC-UA client) · Eclipse Tahu 1.0.14 (Sparkplug B) · Eclipse Paho v3 (MQTT) · Jackson 2.17 · Logback.
+Eclipse Milo 1.1.8 (OPC-UA client) · Eclipse Tahu 1.0.14 (Sparkplug B) · Eclipse Paho v3 (MQTT) · Jackson 2.17 · Logback.
 
 ## License
 
