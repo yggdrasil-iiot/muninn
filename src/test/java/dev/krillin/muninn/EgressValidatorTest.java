@@ -26,19 +26,19 @@ class EgressValidatorTest {
     @Test
     void conformantSampleIsAdmitted() {
         assertTrue(EgressValidator.conformant(
-                new SampledMember("Rpm", MetricDataType.Double, 1535.0), MIXER));
+                new SampledMember("Rpm", MetricDataType.Double, 1535.0, 0L, null, null), MIXER));
     }
 
     @Test
     void unknownMemberIsDropped() {
         assertFalse(EgressValidator.conformant(
-                new SampledMember("Ghost", MetricDataType.Double, 0.0), MIXER));
+                new SampledMember("Ghost", MetricDataType.Double, 0.0, 0L, null, null), MIXER));
     }
 
     @Test
     void typeMismatchIsDropped() {
         // The --inject-bogus shape: right name, wrong type.
         assertFalse(EgressValidator.conformant(
-                new SampledMember("Secret", MetricDataType.String, "x"), MIXER));
+                new SampledMember("Secret", MetricDataType.String, "x", 0L, null, null), MIXER));
     }
 }

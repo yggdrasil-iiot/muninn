@@ -14,6 +14,7 @@
 # Asserts:
 #   HAPPY  : NBIRTH bytes are byte-IDENTICAL to the published registry recipe-setpoints.yaml
 #            (the spine assertion), and all 4 conformant members (Rpm/Temp/Running/Secret) reach NDATA.
+#            Each carries Quality 192, ua_statuscode 0, its source timestamp and its server timestamp.
 #   DROP   : --inject-bogus Secret makes egress-validate drop Secret; only Rpm/Temp/Running reach NDATA.
 #   TAMPER : appending a byte to a COPY of the published recipe makes muninn REFUSE to birth (exit 1).
 #   LOCATION: --hierarchy against a mapping release Bifrost published (the committed fixture
@@ -213,6 +214,12 @@ cmp -s "$WORK/out/birth.bin" "$CANON" \
   || fail "NBIRTH bytes NOT byte-identical to published recipe-setpoints.yaml (spine assertion)"
 for mem in Rpm Temp Running Secret; do
   grep -q "^$mem$" "$WORK/out/ndata.txt" || fail "happy: NDATA missing member $mem"
+done
+# Each member carries what the OPC-UA read returned: Quality, the raw StatusCode, the source
+# timestamp as the metric timestamp and the server timestamp. The sim serves them Good.
+for mem in Rpm Temp Running Secret; do
+  grep -Eq "^\[OBSERVE\] sample $mem quality=192 ua_statuscode=0x00000000 ts=[0-9]+ server=[0-9]+"$'\r'"?$" "$OBS_LOG" \
+    || fail "happy: $mem does not carry Quality, ua_statuscode, source and server timestamps"
 done
 echo "[GATE] HAPPY OK: NBIRTH byte-identical; NDATA carried Rpm/Temp/Running/Secret"
 
