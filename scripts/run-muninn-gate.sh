@@ -16,6 +16,10 @@
 #            (the spine assertion), and all 4 conformant members (Rpm/Temp/Running/Secret) reach NDATA.
 #   DROP   : --inject-bogus Secret makes egress-validate drop Secret; only Rpm/Temp/Running reach NDATA.
 #   TAMPER : appending a byte to a COPY of the published recipe makes muninn REFUSE to birth (exit 1).
+#   LOCATION: --hierarchy against a mapping release Bifrost published (the committed fixture
+#            src/test/resources/bifrost-mappings, Bifrost's own synthetic plant) keeps the NBIRTH
+#            byte-identical and moves the members to DDATA on device synthetic-site:record-line-a.
+#   HIER-TAMPER: one changed byte in a COPY of that release's hierarchy file -> REFUSE (exit 1).
 #
 # Run from anywhere (needs Docker Desktop running + host port 1883 free):
 #   bash scripts/run-muninn-gate.sh
@@ -240,6 +244,51 @@ code=$?
 set -e
 [ "$code" -eq 1 ] || fail "feed (tamper) returned $code — expected 1 (provenance refuse before MQTT connect)"
 echo "[GATE] TAMPER OK: provenance mismatch refused (exit 1), no birth"
+
+# ---------------------------------------------------------------------------
+echo "[GATE] ===== LOCATION: --hierarchy -> NBIRTH unchanged, members on device synthetic-site:record-line-a ====="
+MAPPINGS_WIN="$(cygpath -m "$(pwd)/src/test/resources/bifrost-mappings")"
+BIRTH_LOC_WIN="$(cygpath -m "$(pwd)/$WORK/out/birth-loc.bin")"
+NDATA_LOC_WIN="$(cygpath -m "$(pwd)/$WORK/out/ndata-loc.txt")"
+: > "$OBS_LOG"
+java -jar "$MUNINN_JAR_WIN" observe "$MQTT_URL" "$GROUP" "$BIRTH_LOC_WIN" "$NDATA_LOC_WIN" \
+  --expect-ndata 4 --timeout-ms 20000 > "$OBS_LOG" 2>&1 &
+OBS_PID=$!
+wait_observer_ready || fail "location: observer never printed '[OBSERVE] subscribed'"
+
+set +e
+java -jar "$MUNINN_JAR_WIN" feed "$REGISTRY_WIN" "$REF" "$VERSION" "$ENDPOINT" "$NS_URI" "$INSTANCE" \
+  "$MQTT_URL" "$GROUP" "$EDGE" --hierarchy "$MAPPINGS_WIN" hierarchy-line record-line-a
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "feed (location) returned $code — expected 0"
+
+poll_ndata "$WORK/out/ndata-loc.txt" "$WORK/out/birth-loc.bin" location || fail "location: observer never captured birth+ddata"
+OBS_PID=""
+
+cmp -s "$WORK/out/birth-loc.bin" "$CANON" || fail "location: NBIRTH bytes changed under --hierarchy"
+for mem in Rpm Temp Running Secret; do
+  grep -q "^$mem$" "$WORK/out/ndata-loc.txt" || fail "location: DDATA missing member $mem"
+done
+grep -q "\[OBSERVE\] device synthetic-site:record-line-a$" "$OBS_LOG" \
+  || fail "location: no DDATA on device synthetic-site:record-line-a"
+echo "[GATE] LOCATION OK: NBIRTH byte-identical; DDATA on device synthetic-site:record-line-a"
+
+# ---------------------------------------------------------------------------
+echo "[GATE] ===== HIER-TAMPER: changed byte in the release's hierarchy file -> REFUSE (exit 1) ====="
+cp -r src/test/resources/bifrost-mappings "$WORK/mappings-tampered"
+sed -i 's/"Line A"/"Line X"/' "$WORK/mappings-tampered/releases/release/1.0.0/payload/hierarchy/0.json"
+cmp -s "$WORK/mappings-tampered/releases/release/1.0.0/payload/hierarchy/0.json" \
+  src/test/resources/bifrost-mappings/releases/release/1.0.0/payload/hierarchy/0.json \
+  && fail "hier-tamper: the edit did not change the hierarchy file"
+
+set +e
+java -jar "$MUNINN_JAR_WIN" feed "$REGISTRY_WIN" "$REF" "$VERSION" "$ENDPOINT" "$NS_URI" "$INSTANCE" \
+  "$MQTT_URL" "$GROUP" "$EDGE" --hierarchy "$(cygpath -m "$(pwd)/$WORK/mappings-tampered")" hierarchy-line record-line-a
+code=$?
+set -e
+[ "$code" -eq 1 ] || fail "feed (hier-tamper) returned $code — expected 1 (refuse before MQTT connect)"
+echo "[GATE] HIER-TAMPER OK: hierarchy digest mismatch refused (exit 1), no birth"
 
 # ---------------------------------------------------------------------------
 echo "[GATE] step 7: teardown"

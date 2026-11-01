@@ -74,4 +74,24 @@ class SparkplugCodecTest {
         assertEquals(1535.0, rpm);
         assertEquals(1L, ndata.getSeq());
     }
+
+    /** --hierarchy feed: DBIRTH (seq 1) declares the members, DDATA (seq 2) reports them. */
+    @Test
+    void dbirthThenDdataCarryTheSameMembersInSequence() throws Exception {
+        List<SampledMember> samples = List.of(
+                new SampledMember("Rpm", MetricDataType.Double, 1535.0),
+                new SampledMember("Running", MetricDataType.Boolean, true));
+
+        for (SparkplugBPayload p : List.of(SparkplugCodec.buildDbirth(samples, 1L),
+                SparkplugCodec.buildDdata(samples, 2L))) {
+            byte[] wire = new SparkplugBPayloadEncoder().getBytes(p, false);
+            SparkplugBPayload rt = new SparkplugBPayloadDecoder().buildFromByteArray(wire, null);
+            assertEquals(Set.of("Rpm", "Running"),
+                    rt.getMetrics().stream().map(Metric::getName).collect(Collectors.toSet()));
+        }
+        assertEquals(1L, SparkplugCodec.buildDbirth(samples, 1L).getSeq());
+        assertEquals(2L, SparkplugCodec.buildDdata(samples, 2L).getSeq());
+        assertEquals("spBv1.0/g/DBIRTH/e/site:line",
+                MqttPublisher.topic("g", "DBIRTH", "e", "site:line"));
+    }
 }

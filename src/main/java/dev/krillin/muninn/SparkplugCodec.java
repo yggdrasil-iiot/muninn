@@ -41,6 +41,23 @@ public final class SparkplugCodec {
      * (name + already-resolved Tahu type + value).
      */
     public static SparkplugBPayload buildNdata(List<SampledMember> conformant, long seq) throws Exception {
+        return buildSamples(conformant, seq);
+    }
+
+    /**
+     * DBIRTH at the given {@code seq}: declares every conformant member the device will report,
+     * with its current value. Same metric shape as NDATA; the device level lives in the topic.
+     */
+    public static SparkplugBPayload buildDbirth(List<SampledMember> conformant, long seq) throws Exception {
+        return buildSamples(conformant, seq);
+    }
+
+    /** DDATA at the given {@code seq} carrying one metric per conformant sample. */
+    public static SparkplugBPayload buildDdata(List<SampledMember> conformant, long seq) throws Exception {
+        return buildSamples(conformant, seq);
+    }
+
+    private static SparkplugBPayload buildSamples(List<SampledMember> conformant, long seq) throws Exception {
         SparkplugBPayloadBuilder b = new SparkplugBPayloadBuilder().setTimestamp(new Date()).setSeq(seq);
         for (SampledMember s : conformant) {
             b.addMetric(new MetricBuilder(s.name(), s.type(), s.value()).createMetric());

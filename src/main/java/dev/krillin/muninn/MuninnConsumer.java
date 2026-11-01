@@ -21,7 +21,9 @@ import org.eclipse.tahu.message.model.SparkplugBPayload;
  * group's Sparkplug tree, captures the NBIRTH's governed-definition bytes to {@code birthOutFile}
  * and every NDATA metric name to {@code ndataOutFile}, and counts down once a birth plus the
  * expected number of NDATA member-lines have been seen. When an optional {@code valuesOutFile}
- * is provided, each NDATA metric is additionally written as {@code name=value} to it.
+ * is provided, each NDATA metric is additionally written as {@code name=value} to it. DDATA
+ * (the {@code --hierarchy} feed) is captured the same way, and its device ID is logged as
+ * {@code [OBSERVE] device <id>}.
  *
  * <p>Both out files are truncated/created empty at construction so a prior run's captures can
  * NEVER leak into this run's assertions. The synchronous {@code subscribe} + a flushed readiness
@@ -103,7 +105,12 @@ public final class MuninnConsumer implements MqttCallback {
                     break;
                 }
             }
-        } else if (type.equals("NDATA")) {
+        } else if (type.equals("NDATA") || type.equals("DDATA")) {
+            if (type.equals("DDATA") && parts.length > 4) {
+                // Device topics carry the equipment's location path as the fifth level.
+                System.out.println("[OBSERVE] device " + parts[4]);
+                System.out.flush();
+            }
             for (Metric metric : payload.getMetrics()) {
                 Files.write(ndataOutFile, (metric.getName() + "\n").getBytes(),
                         StandardOpenOption.APPEND);
