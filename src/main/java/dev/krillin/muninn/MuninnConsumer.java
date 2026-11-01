@@ -23,7 +23,8 @@ import org.eclipse.tahu.message.model.SparkplugBPayload;
  * expected number of NDATA member-lines have been seen. When an optional {@code valuesOutFile}
  * is provided, each NDATA metric is additionally written as {@code name=value} to it. DDATA
  * (the {@code --hierarchy} feed) is captured the same way, and its device ID is logged as
- * {@code [OBSERVE] device <id>}.
+ * {@code [OBSERVE] device <id>}. Every message is also logged as {@link #sessionLine} so the
+ * session gate can follow {@code seq} and {@code bdSeq}.
  *
  * <p>Both out files are truncated/created empty at construction so a prior run's captures can
  * NEVER leak into this run's assertions. The synchronous {@code subscribe} + a flushed readiness
@@ -68,6 +69,23 @@ public final class MuninnConsumer implements MqttCallback {
         System.out.flush();
     }
 
+    /**
+     * One line per message for the session gate: {@code [OBSERVE] <type> seq=<n> bdSeq=<n>}, each
+     * field only when the payload carries it (NDEATH has no seq; only NBIRTH and NDEATH a bdSeq).
+     */
+    static String sessionLine(String type, SparkplugBPayload payload) {
+        StringBuilder b = new StringBuilder("[OBSERVE] ").append(type);
+        if (payload.getSeq() != null) {
+            b.append(" seq=").append(payload.getSeq());
+        }
+        for (Metric metric : payload.getMetrics()) {
+            if (SparkplugCodec.BD_SEQ.equals(metric.getName())) {
+                b.append(" bdSeq=").append(metric.getValue());
+            }
+        }
+        return b.toString();
+    }
+
     /** Renders an NDATA metric as {@code name=value} for the gate's value assertion. */
     static String valueLine(Metric metric) {
         return metric.getName() + "=" + metric.getValue();
@@ -96,6 +114,9 @@ public final class MuninnConsumer implements MqttCallback {
             System.out.println("[OBSERVE] decode failed " + topic + ": " + e.getMessage());
             return;
         }
+
+        System.out.println(sessionLine(type, payload));
+        System.out.flush();
 
         if (type.equals("NBIRTH")) {
             for (Metric metric : payload.getMetrics()) {

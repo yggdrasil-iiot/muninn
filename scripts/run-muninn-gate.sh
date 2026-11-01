@@ -20,6 +20,16 @@
 #            src/test/resources/bifrost-mappings, Bifrost's own synthetic plant) keeps the NBIRTH
 #            byte-identical and moves the members to DDATA on device synthetic-site:record-line-a.
 #   HIER-TAMPER: one changed byte in a COPY of that release's hierarchy file -> REFUSE (exit 1).
+#   SESSION: feed --session with --max-cycles: NBIRTH seq 0 bdSeq 0 (byte-identical), NDATA seq
+#            1..N, then NDEATH bdSeq 0 and exit 0.
+#   REBIRTH: an NCMD Node Control/Rebirth -> a second NBIRTH seq 0 with the same bdSeq, data seq
+#            restarts.
+#   REBIRTH-TAMPER: the registry changes under a live session -> the rebirth is refused, NDEATH,
+#            exit 1, no second NBIRTH.
+#   WILL   : the session process is killed -> the broker delivers its Will NDEATH bdSeq 0.
+#   HOST   : --primary-host -> no birth until STATE online; an older offline is ignored; offline ->
+#            NDEATH; online again -> NBIRTH with bdSeq 1.
+#   BROKER-LOSS: the broker stops while a session waits for its host -> the session ends, exit 2.
 #
 # Run from anywhere (needs Docker Desktop running + host port 1883 free):
 #   bash scripts/run-muninn-gate.sh
@@ -289,6 +299,139 @@ code=$?
 set -e
 [ "$code" -eq 1 ] || fail "feed (hier-tamper) returned $code — expected 1 (refuse before MQTT connect)"
 echo "[GATE] HIER-TAMPER OK: hierarchy digest mismatch refused (exit 1), no birth"
+
+# ---------------------------------------------------------------------------
+# Session cases (feed --session). The observer logs one '[OBSERVE] <type> seq=.. bdSeq=..' line per
+# message; each case starts its own observer and kills it afterwards.
+start_session_observer() {  # $1=label
+  : > "$OBS_LOG"
+  java -jar "$MUNINN_JAR_WIN" observe "$MQTT_URL" "$GROUP" \
+    "$(cygpath -m "$(pwd)/$WORK/out/birth-$1.bin")" "$(cygpath -m "$(pwd)/$WORK/out/ndata-$1.txt")" \
+    --expect-ndata 1000000 --timeout-ms 120000 > "$OBS_LOG" 2>&1 &
+  wait_observer_ready || fail "$1: observer never printed '[OBSERVE] subscribed'"
+}
+
+wait_log() {  # $1=extended regex over the observer log  $2=what  — up to 20 s
+  local t=0
+  while [ "$t" -lt 40 ]; do
+    grep -Eq "$1" "$OBS_LOG" 2>/dev/null && return 0
+    sleep 0.5; t=$((t + 1))
+  done
+  fail "$2 (no line matching '$1')"
+}
+
+count_log() {  # $1=extended regex
+  grep -Ec "$1" "$OBS_LOG" 2>/dev/null || true
+}
+
+session_feed() {  # $1=registry dir  $@=extra flags; runs in the background, sets FEED_JOB
+  local reg="$1"; shift
+  java -jar "$MUNINN_JAR_WIN" feed "$reg" "$REF" "$VERSION" "$ENDPOINT" "$NS_URI" "$INSTANCE" \
+    "$MQTT_URL" "$GROUP" "$EDGE" "$@" > "$WORK/out/feed.log" 2>&1 &
+  FEED_JOB=$!
+}
+
+host() {
+  java -jar "$MUNINN_JAR_WIN" host "$MQTT_URL" "$@" >/dev/null || fail "host $* failed"
+}
+
+# ---------------------------------------------------------------------------
+echo "[GATE] ===== SESSION: --session 300 --max-cycles 4 -> NBIRTH seq 0, NDATA seq 1..4, NDEATH ====="
+start_session_observer session
+set +e
+java -jar "$MUNINN_JAR_WIN" feed "$REGISTRY_WIN" "$REF" "$VERSION" "$ENDPOINT" "$NS_URI" "$INSTANCE" \
+  "$MQTT_URL" "$GROUP" "$EDGE" --session 300 --max-cycles 4
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "session returned $code — expected 0"
+wait_log "^\[OBSERVE\] NDEATH bdSeq=0$" "session: no NDEATH bdSeq=0 after the last cycle"
+grep -q "^\[OBSERVE\] NBIRTH seq=0 bdSeq=0$" "$OBS_LOG" || fail "session: no NBIRTH seq=0 bdSeq=0"
+for n in 1 2 3 4; do
+  grep -q "^\[OBSERVE\] NDATA seq=$n$" "$OBS_LOG" || fail "session: no NDATA seq=$n"
+done
+[ "$(count_log '^\[OBSERVE\] NDATA')" -eq 4 ] || fail "session: expected exactly 4 NDATA"
+cmp -s "$WORK/out/birth-session.bin" "$CANON" || fail "session: NBIRTH bytes not byte-identical to the registry"
+kill_by_mainclass "muninn.jar observe"
+echo "[GATE] SESSION OK: NBIRTH seq 0 bdSeq 0 byte-identical; NDATA seq 1..4; NDEATH bdSeq 0; exit 0"
+
+# ---------------------------------------------------------------------------
+echo "[GATE] ===== REBIRTH: NCMD rebirth -> verified again, NBIRTH seq 0 with the same bdSeq ====="
+start_session_observer rebirth
+session_feed "$REGISTRY_WIN" --session 300 --max-cycles 15
+wait_log "^\[OBSERVE\] NDATA seq=2$" "rebirth: session never reached NDATA seq=2"
+host rebirth "$GROUP" "$EDGE"
+wait_log "^\[OBSERVE\] NDEATH bdSeq=0$" "rebirth: session did not end"
+set +e; wait "$FEED_JOB"; code=$?; set -e
+[ "$code" -eq 0 ] || fail "rebirth: session returned $code — expected 0"
+[ "$(count_log '^\[OBSERVE\] NBIRTH seq=0 bdSeq=0$')" -eq 2 ] || fail "rebirth: expected two NBIRTH seq=0 bdSeq=0"
+awk '/NBIRTH/{b++} b==2 && /NDATA seq=1$/{ok=1} END{exit !ok}' "$OBS_LOG" \
+  || fail "rebirth: seq did not restart at 1 after the second NBIRTH"
+cmp -s "$WORK/out/birth-rebirth.bin" "$CANON" || fail "rebirth: second NBIRTH not byte-identical"
+kill_by_mainclass "muninn.jar observe"
+echo "[GATE] REBIRTH OK: second NBIRTH seq 0 bdSeq 0 byte-identical; data seq restarted"
+
+# ---------------------------------------------------------------------------
+echo "[GATE] ===== REBIRTH-TAMPER: registry changed under a live session -> rebirth refused, NDEATH, exit 1 ====="
+rm -rf "$WORK/registry-live"
+cp -r "$WORK/registry" "$WORK/registry-live"
+start_session_observer rebirth-tamper
+session_feed "$(cygpath -m "$(pwd)/$WORK/registry-live")" --session 300
+wait_log "^\[OBSERVE\] NDATA seq=2$" "rebirth-tamper: session never reached NDATA seq=2"
+printf 'X' >> "$WORK/registry-live/recipe/$REF/$VERSION/recipe-setpoints.yaml"
+host rebirth "$GROUP" "$EDGE"
+wait_log "^\[OBSERVE\] NDEATH bdSeq=0$" "rebirth-tamper: no NDEATH after the refused rebirth"
+set +e; wait "$FEED_JOB"; code=$?; set -e
+[ "$code" -eq 1 ] || fail "rebirth-tamper: session returned $code — expected 1"
+[ "$(count_log '^\[OBSERVE\] NBIRTH')" -eq 1 ] || fail "rebirth-tamper: a second NBIRTH was published"
+grep -q "\[MUNINN\] refuse" "$WORK/out/feed.log" || fail "rebirth-tamper: no refusal logged"
+kill_by_mainclass "muninn.jar observe"
+echo "[GATE] REBIRTH-TAMPER OK: rebirth refused, NDEATH bdSeq 0, exit 1"
+
+# ---------------------------------------------------------------------------
+echo "[GATE] ===== WILL: session killed without NDEATH -> broker delivers the Will NDEATH ====="
+start_session_observer will
+session_feed "$REGISTRY_WIN" --session 300
+wait_log "^\[OBSERVE\] NDATA seq=2$" "will: session never reached NDATA seq=2"
+kill_by_mainclass "muninn.jar feed"
+wait_log "^\[OBSERVE\] NDEATH bdSeq=0$" "will: broker did not deliver the Will NDEATH"
+kill_by_mainclass "muninn.jar observe"
+echo "[GATE] WILL OK: forced kill -> Will NDEATH bdSeq 0 from the broker"
+
+# ---------------------------------------------------------------------------
+echo "[GATE] ===== HOST: --primary-host -> birth waits for online; offline -> NDEATH, next bdSeq ====="
+HOST_ID="gate-host-$$-$RANDOM"
+start_session_observer host
+session_feed "$REGISTRY_WIN" --session 300 --primary-host "$HOST_ID"
+sleep 3
+[ "$(count_log '^\[OBSERVE\] (NBIRTH|NDATA)')" -eq 0 ] || fail "host: birth or data before the host was online"
+host state "$HOST_ID" true 1000
+wait_log "^\[OBSERVE\] NDATA seq=1$" "host: no birth and data after STATE online"
+grep -q "^\[OBSERVE\] NBIRTH seq=0 bdSeq=0$" "$OBS_LOG" || fail "host: first NBIRTH not bdSeq=0"
+host state "$HOST_ID" false 500
+sleep 1
+[ "$(count_log '^\[OBSERVE\] NDEATH')" -eq 0 ] || fail "host: an older offline STATE ended the session"
+host state "$HOST_ID" false 1000
+wait_log "^\[OBSERVE\] NDEATH bdSeq=0$" "host: no NDEATH after STATE offline"
+host state "$HOST_ID" true 2000
+wait_log "^\[OBSERVE\] NBIRTH seq=0 bdSeq=1$" "host: no NBIRTH with the next bdSeq after STATE online"
+kill_by_mainclass "muninn.jar feed"
+wait_log "^\[OBSERVE\] NDEATH bdSeq=1$" "host: Will of the second session did not carry bdSeq=1"
+kill_by_mainclass "muninn.jar observe"
+echo "[GATE] HOST OK: birth waited for online; stale offline ignored; offline -> NDEATH 0; online -> NBIRTH bdSeq 1"
+
+# ---------------------------------------------------------------------------
+# Last on purpose: it stops the broker.
+echo "[GATE] ===== BROKER-LOSS: broker stops while the session waits for its host -> exit 2 ====="
+session_feed "$REGISTRY_WIN" --session 300 --primary-host "gate-absent-host-$$-$RANDOM"
+t=0
+until grep -q "\[MUNINN\] session up" "$WORK/out/feed.log" 2>/dev/null; do
+  sleep 0.5; t=$((t + 1)); [ "$t" -lt 40 ] || fail "broker-loss: session never came up"
+done
+docker compose -f "$COMPOSE_WIN" stop hivemq-ce >/dev/null 2>&1 || fail "broker-loss: could not stop the broker"
+set +e; wait "$FEED_JOB"; code=$?; set -e
+[ "$code" -eq 2 ] || fail "broker-loss: session returned $code — expected 2"
+grep -q "broker connection lost" "$WORK/out/feed.log" || fail "broker-loss: no 'broker connection lost' in the feed log"
+echo "[GATE] BROKER-LOSS OK: lost broker connection while waiting for the host ended the session (exit 2)"
 
 # ---------------------------------------------------------------------------
 echo "[GATE] step 7: teardown"

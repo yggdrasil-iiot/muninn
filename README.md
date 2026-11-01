@@ -26,14 +26,25 @@ mvn install        # Java 17; shades an executable target/muninn.jar
 # Feed: provenance-verify -> NBIRTH -> sample OPC-UA instance -> egress-validate -> NDATA
 java -jar target/muninn.jar feed <registryDir> <ref> <version> <opcEndpoint> <nsUri> \
      <instanceNodeIdent> <mqttUrl> <group> <edge> [--inject-bogus <member>] \
-     [--hierarchy <mappingsDir> <stream> <equipmentInstanceId>]
+     [--hierarchy <mappingsDir> <stream> <equipmentInstanceId>] \
+     [--session <periodMs> [--max-cycles N] [--primary-host <hostId>]]
 
 # Observe (gate harness): capture NBIRTH bytes + NDATA/DDATA member names (+ optional name=value)
 java -jar target/muninn.jar observe <mqttUrl> <group> <birthOutFile> <ndataOutFile> \
      [--expect-ndata N] [--timeout-ms M] [--ndata-values <file>]
+
+# Host (gate harness): primary host state and rebirth control
+java -jar target/muninn.jar host <mqttUrl> state <hostId> <online> <timestamp>
+java -jar target/muninn.jar host <mqttUrl> rebirth <group> <edge>
 ```
 
-Exit codes: `0` ok · `1` governance-refuse (provenance mismatch, or a hierarchy that does not verify) · `2` usage/error.
+`--max-cycles` and `--primary-host` are accepted only together with `--session` (otherwise exit 2).
+
+`observe` prints one line per received message: `[OBSERVE] <type> seq=<n> bdSeq=<n>`, omitting each field when absent from the payload.
+
+`host state` publishes the host's STATE JSON `{"online":..,"timestamp":..}` on `spBv1.0/STATE/<hostId>` (QoS 1, retained). `host rebirth` publishes an NCMD with `Node Control/Rebirth = true`.
+
+Exit codes: `0` ok · `1` governance-refuse (provenance mismatch, a hierarchy that does not verify, or a session whose definition or hierarchy no longer verifies at a rebirth) · `2` usage/error.
 
 ## ISA-95 location for the UNS
 
@@ -49,13 +60,49 @@ Verification chain, each link raw-byte SHA-256, the way any consumer outside Bif
 
 Muninn **refuses** (exit 1) before any MQTT or OPC-UA connect when: a digest does not match; a file is missing or not listed; the release has zero or several hierarchies; the document is not `equipment-hierarchy` 2.23.0; the instance is not in the hierarchy; a parent is missing; a cycle; a path deeper than 64; a stream or head segment that would leave the mappings directory; an ID containing `/` (cannot be a Sparkplug topic token) or `.` (UMH would read it as an extra level), or `:`, `+`, `#`. The contract's ID pattern allows `/` and `.`, so such IDs are refused rather than rewritten.
 
+## Persistent Sparkplug session
+
+`--session <periodMs>` turns the feed into a persistent Sparkplug B 3.0 edge-node session. Without `--session`, the feed remains a one-shot run (used by Bifrost's gates).
+
+The governed inputs are verified once before any MQTT or OPC-UA connect, exactly as in the one-shot feeder. A refusal exits 1 before connecting.
+
+Every MQTT CONNECT is a clean session with client ID `muninn-edge-<edge>`, carrying an NDEATH Will (QoS 1, not retained) with an Int64 `bdSeq` metric. The NBIRTH carries the same `bdSeq`. The next CONNECT increments `bdSeq`, wrapping from 255 to 0.
+
+NBIRTH has `seq` 0 and carries `bdSeq`, the same byte-exact `governed_definition` metric as the one-shot, and `Node Control/Rebirth = false`. With `--hierarchy`, DBIRTH follows. Every subsequent message increments `seq` by 1, wrapping from 255 to 0. NDEATH carries no `seq`.
+
+Every `periodMs`, the session samples the OPC-UA instance, egress-validates the samples as the one-shot does, and publishes NDATA (or DDATA with `--hierarchy`).
+
+An NCMD with `Node Control/Rebirth = true` makes the session read and verify the registry (and hierarchy, when given) again, then publish a complete NBIRTH (`seq` 0, same `bdSeq`) and DBIRTH. If the inputs no longer verify, the session publishes NDEATH, disconnects, and exits 1. A rebirth request before the first birth is ignored. Every other NCMD metric and every DCMD is ignored: Muninn reads the plant and never writes to it.
+
+With `--primary-host <hostId>`, the session subscribes to `spBv1.0/STATE/<hostId>` and publishes no birth until that host's STATE says `online: true`. A STATE `online: false` whose timestamp is at least that of the last `online: true` makes the session publish NDEATH, disconnect, connect again with the next `bdSeq`, and wait for the host. An older `online: false` is ignored.
+
+`--max-cycles N` ends the session after N data messages and exits 0. Ctrl-C (or any JVM shutdown) ends it as well. Both publish NDEATH before disconnecting. If the process dies without that, the broker publishes the Will NDEATH.
+
+One thread owns every decision: MQTT callbacks and the shutdown hook only queue events (rebirth, host state, lost connection, stop), and the session loop takes them between data cycles. A rebirth or a host going offline never interleaves with a publish.
+
 ## Acceptance gate
 
-`scripts/run-muninn-gate.sh` composes a HiveMQ CE broker (Docker), the Bifrost sim's OPC-UA server, and Bifrost's `gates` jar to prove, end to end: byte-exact NBIRTH, all members reach NDATA, a bogus member is dropped by egress-validation, a tampered registry is refused (exit 1), with `--hierarchy` against a mapping release Bifrost published (committed under `src/test/resources/bifrost-mappings`, Bifrost's own synthetic plant) the NBIRTH stays byte-identical and all members arrive as DDATA on device `synthetic-site:record-line-a`, and one changed byte in a copy of that release's hierarchy file is refused (exit 1). Requires Docker Desktop + host port 1883 free.
+`scripts/run-muninn-gate.sh` composes a HiveMQ CE broker (Docker), the Bifrost sim's OPC-UA server, and Bifrost's `gates` jar to prove, end to end:
+- byte-exact NBIRTH;
+- all members reach NDATA;
+- a bogus member is dropped by egress-validation;
+- a tampered registry is refused (exit 1);
+- with `--hierarchy` against a mapping release Bifrost published (committed under `src/test/resources/bifrost-mappings`, Bifrost's own synthetic plant), the NBIRTH stays byte-identical and all members arrive as DDATA on device `synthetic-site:record-line-a`;
+- one changed byte in a copy of that release's hierarchy file is refused (exit 1).
+
+The gate also proves, against the same broker, for `--session`:
+- with `--max-cycles 4`: NBIRTH seq 0 bdSeq 0 byte-identical to the registry, NDATA seq 1 to 4, then NDEATH bdSeq 0 and exit 0;
+- an NCMD rebirth sent with the `host` subcommand: a second NBIRTH seq 0 with the same bdSeq, byte-identical, and data seq restarting at 1;
+- a registry copy changed under a live session: the rebirth is refused, NDEATH bdSeq 0, exit 1, no second NBIRTH;
+- the session process killed: the broker delivers the Will NDEATH bdSeq 0;
+- `--primary-host`: no birth until the host's STATE is online; an older offline STATE is ignored; offline publishes NDEATH; online again brings an NBIRTH with bdSeq 1;
+- the broker container stopped while a session started with `--primary-host` is still waiting for its host's STATE: the session ends with exit 2 and logs "broker connection lost".
+
+Requires Docker Desktop + host port 1883 free.
 
 ## Honest scope
 
-- **One-shot feeder**, not a compliant persistent Sparkplug edge node: one NBIRTH (`seq=0`) + one NDATA, or with `--hierarchy` one NBIRTH + one DBIRTH + one DDATA, then exit. No `bdSeq` / NDEATH-LWT / STATE / rebirth session semantics (the codec already parameterizes `seq`, so this is an additive extension, not a rewrite).
+- **Session lifecycle and delivery**: one-shot is the default; `--session` provides the persistent edge node. The session does not reconnect by itself after the broker connection is lost: the broker publishes the Will and the process ends with exit 2, so a supervisor (systemd, a container restart policy) restarts it and the restart is a new session with a fresh birth. No store-and-forward: nothing is sampled or buffered while the Primary Host is offline. Every data message carries all conformant members each period (no report-by-exception).
 - **Egress validation is structural/type only, not range** — it filters by member name + `MetricDataType`, not engineering range (range is a design-time governance concern in Bifrost's spec gate).
 - **Provenance = content-hash vs a self-attested manifest** — integrity-since-publish, not authenticity (no signing / trust anchor). The `--hierarchy` release chain is read the same way: Bifrost's head attestation is not checked.
 - Single broker / single edge / single instance / localhost.

@@ -1,9 +1,17 @@
 package dev.krillin.muninn;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.eclipse.tahu.message.SparkplugBPayloadEncoder;
 import org.eclipse.tahu.message.model.MetricDataType;
 
@@ -15,8 +23,11 @@ import org.eclipse.tahu.message.model.MetricDataType;
  *   feed    &lt;registryDir&gt; &lt;ref&gt; &lt;version&gt; &lt;opcEndpoint&gt; &lt;nsUri&gt; &lt;instanceNodeIdent&gt;
  *           &lt;mqttUrl&gt; &lt;group&gt; &lt;edge&gt; [--inject-bogus &lt;member&gt;]
  *           [--hierarchy &lt;mappingsDir&gt; &lt;stream&gt; &lt;equipmentInstanceId&gt;]
+ *           [--session &lt;periodMs&gt; [--max-cycles N] [--primary-host &lt;hostId&gt;]]
  *   observe &lt;mqttUrl&gt; &lt;group&gt; &lt;birthOutFile&gt; &lt;ndataOutFile&gt;
  *           [--expect-ndata N] [--timeout-ms M]
+ *   host    &lt;mqttUrl&gt; state &lt;hostId&gt; &lt;online&gt; &lt;timestamp&gt;
+ *   host    &lt;mqttUrl&gt; rebirth &lt;group&gt; &lt;edge&gt;
  * </pre>
  */
 public final class MuninnMain {
@@ -33,6 +44,7 @@ public final class MuninnMain {
             switch (args[0]) {
                 case "feed" -> feed(args);
                 case "observe" -> observe(args);
+                case "host" -> host(args);
                 default -> {
                     usage();
                     System.exit(2);
@@ -62,12 +74,21 @@ public final class MuninnMain {
 
         String injectBogus = null;
         String[] hierarchy = null;
+        long sessionPeriod = 0;
+        int maxCycles = 0;
+        String primaryHost = null;
         for (int i = 10; i < args.length; i++) {
             if ("--inject-bogus".equals(args[i]) && i + 1 < args.length) {
                 injectBogus = args[++i];
             } else if ("--hierarchy".equals(args[i]) && i + 3 < args.length) {
                 hierarchy = new String[] {args[i + 1], args[i + 2], args[i + 3]};
                 i += 3;
+            } else if ("--session".equals(args[i]) && i + 1 < args.length) {
+                sessionPeriod = Long.parseLong(args[++i]);
+            } else if ("--max-cycles".equals(args[i]) && i + 1 < args.length) {
+                maxCycles = Integer.parseInt(args[++i]);
+            } else if ("--primary-host".equals(args[i]) && i + 1 < args.length) {
+                primaryHost = args[++i];
             } else {
                 System.err.println("unknown argument: " + args[i]);
                 usage();
@@ -93,6 +114,16 @@ public final class MuninnMain {
                 System.err.println("[MUNINN] refuse: " + e.getMessage());
                 System.exit(1);
             }
+        }
+
+        if (sessionPeriod <= 0 && (maxCycles != 0 || primaryHost != null)) {
+            System.err.println("--max-cycles and --primary-host need --session");
+            usage();
+            System.exit(2);
+        }
+        if (sessionPeriod > 0) {
+            System.exit(session(registryDir, ref, version, hierarchy, opcEndpoint, nsUri, instanceNodeIdent,
+                    mqttUrl, group, edge, injectBogus, sessionPeriod, maxCycles, primaryHost));
         }
 
         // 2. Re-parse the governed contract from the verified bytes.
@@ -152,6 +183,70 @@ public final class MuninnMain {
         System.exit(0);
     }
 
+    /**
+     * {@code feed --session}: the inputs already verified once (refusal before any connect); the
+     * session verifies them again at every (re)birth. Ctrl-C or a stop signal ends it with NDEATH.
+     */
+    private static int session(String registryDir, String ref, String version, String[] hierarchy,
+            String opcEndpoint, String nsUri, String instanceNodeIdent, String mqttUrl, String group,
+            String edge, String injectBogus, long periodMs, int maxCycles, String primaryHost) throws Exception {
+        EdgeSession.Verifier verifier = () -> {
+            VerifiedDefinition v = ProvenanceVerifier.verify(Path.of(registryDir), ref, version);
+            String device = hierarchy == null ? null
+                    : HierarchyLocator.locate(Path.of(hierarchy[0]), hierarchy[1], hierarchy[2]);
+            try {
+                return new EdgeSession.Birth(v.bytes(), DefinitionJson.fromBytes(v.bytes()), device);
+            } catch (Exception e) {
+                throw new ProvenanceException("governed definition does not parse", e);
+            }
+        };
+        OpcUaClient c = OpcUaClient.create(opcEndpoint);
+        c.connect();
+        EdgeSession.Sampler sampler = () -> OpcUaInstanceBrowser.sample(c, nsUri, instanceNodeIdent).stream()
+                .map(s -> injectBogus != null && injectBogus.equals(s.name())
+                        ? new SampledMember(s.name(), MetricDataType.String, s.value())
+                        : s)
+                .toList();
+
+        BlockingQueue<EdgeSession.Event> events = new LinkedBlockingQueue<>();
+        EdgeSession session = new EdgeSession(new PahoTransport(mqttUrl, edge, events), verifier, sampler,
+                group, edge, primaryHost);
+        CountDownLatch done = new CountDownLatch(1);
+        Thread hook = shutdownStop(events, done);
+        Runtime.getRuntime().addShutdownHook(hook);
+        int code;
+        try {
+            System.out.println("[MUNINN] session up: period " + periodMs + " ms"
+                    + (primaryHost == null ? "" : ", waiting for host " + primaryHost));
+            code = session.run(events, periodMs, maxCycles);
+        } finally {
+            done.countDown();
+            c.disconnect();
+        }
+        System.out.println("[MUNINN] session ended after " + session.dataCycles() + " data cycles, exit " + code);
+        try {
+            Runtime.getRuntime().removeShutdownHook(hook);
+        } catch (IllegalStateException alreadyShuttingDown) {
+            // The hook asked for this stop; the JVM is exiting anyway.
+        }
+        return code;
+    }
+
+    /**
+     * The shutdown hook (Ctrl-C, SIGTERM): asks the session loop to stop — NDEATH, then disconnect —
+     * and holds the JVM up to 5 s until {@code done} says the loop has finished.
+     */
+    static Thread shutdownStop(BlockingQueue<EdgeSession.Event> events, CountDownLatch done) {
+        return new Thread(() -> {
+            events.add(new EdgeSession.Stop());
+            try {
+                done.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        });
+    }
+
     private static void observe(String[] args) throws Exception {
         // observe <mqttUrl> <group> <birthOutFile> <ndataOutFile>
         //         [--expect-ndata N] [--timeout-ms M] [--ndata-values <file>]
@@ -189,12 +284,45 @@ public final class MuninnMain {
         System.exit(got ? 0 : 2);
     }
 
+    /**
+     * Gate harness acting as a Primary Host Application: publishes its STATE (QoS 1, retained,
+     * as Sparkplug 3.0 requires) or an NCMD {@code Node Control/Rebirth = true} to one edge node.
+     */
+    private static void host(String[] args) throws Exception {
+        if (args.length == 6 && "state".equals(args[2])) {
+            String json = "{\"online\":" + Boolean.parseBoolean(args[4]) + ",\"timestamp\":"
+                    + Long.parseLong(args[5]) + "}";
+            hostPublish(args[1], EdgeSession.stateTopic(args[3]), json.getBytes(StandardCharsets.UTF_8), true);
+        } else if (args.length == 5 && "rebirth".equals(args[2])) {
+            hostPublish(args[1], MqttPublisher.topic(args[3], "NCMD", args[4]),
+                    new SparkplugBPayloadEncoder().getBytes(SparkplugCodec.buildRebirthCommand(), false), false);
+        } else {
+            usage();
+            System.exit(2);
+        }
+        System.exit(0);
+    }
+
+    private static void hostPublish(String mqttUrl, String topic, byte[] payload, boolean retained) throws Exception {
+        MqttClient client = new MqttClient(mqttUrl, "muninn-host", new MemoryPersistence());
+        MqttConnectOptions o = new MqttConnectOptions();
+        o.setCleanSession(true);
+        client.connect(o);
+        client.publish(topic, payload, 1, retained);
+        client.disconnect();
+        client.close();
+        System.out.println("[HOST] published " + topic);
+    }
+
     private static void usage() {
         System.err.println("Usage:");
         System.err.println("  feed <registryDir> <ref> <version> <opcEndpoint> <nsUri> "
                 + "<instanceNodeIdent> <mqttUrl> <group> <edge> [--inject-bogus <member>] "
-                + "[--hierarchy <mappingsDir> <stream> <equipmentInstanceId>]");
+                + "[--hierarchy <mappingsDir> <stream> <equipmentInstanceId>] "
+                + "[--session <periodMs> [--max-cycles N] [--primary-host <hostId>]]");
         System.err.println("  observe <mqttUrl> <group> <birthOutFile> <ndataOutFile> "
                 + "[--expect-ndata N] [--timeout-ms M] [--ndata-values <file>]");
+        System.err.println("  host <mqttUrl> state <hostId> <online> <timestamp>");
+        System.err.println("  host <mqttUrl> rebirth <group> <edge>");
     }
 }
