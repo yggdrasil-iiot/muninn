@@ -55,8 +55,8 @@ class SparkplugCodecTest {
     @Test
     void ndataCarriesConformantSamplesWithGivenSeq() throws Exception {
         List<SampledMember> samples = List.of(
-                new SampledMember("Rpm", MetricDataType.Double, 1535.0),
-                new SampledMember("Running", MetricDataType.Boolean, true));
+                new SampledMember("Rpm", MetricDataType.Double, 1535.0, 0L, null, null),
+                new SampledMember("Running", MetricDataType.Boolean, true, 0L, null, null));
 
         SparkplugBPayload ndata = SparkplugCodec.buildNdata(samples, 1L);
         byte[] wire = new SparkplugBPayloadEncoder().getBytes(ndata, false);
@@ -79,8 +79,8 @@ class SparkplugCodecTest {
     @Test
     void dbirthThenDdataCarryTheSameMembersInSequence() throws Exception {
         List<SampledMember> samples = List.of(
-                new SampledMember("Rpm", MetricDataType.Double, 1535.0),
-                new SampledMember("Running", MetricDataType.Boolean, true));
+                new SampledMember("Rpm", MetricDataType.Double, 1535.0, 0L, null, null),
+                new SampledMember("Running", MetricDataType.Boolean, true, 0L, null, null));
 
         for (SparkplugBPayload p : List.of(SparkplugCodec.buildDbirth(samples, 1L),
                 SparkplugCodec.buildDdata(samples, 2L))) {

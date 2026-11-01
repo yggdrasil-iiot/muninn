@@ -7,6 +7,7 @@ import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.stack.core.AttributeId;
 import org.eclipse.milo.opcua.stack.core.NamespaceTable;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
+import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
@@ -24,7 +25,7 @@ import org.eclipse.tahu.message.model.MetricDataType;
 /**
  * Live shell (Milo 1.1.8): FAITHFULLY sample a governed equipment INSTANCE's member
  * Variables into pure {@link SampledMember} facts (name + resolved Tahu {@link MetricDataType}
- * + live value). Mirrors mimir's {@code OpcUaMixerBrowser} browse + DataType-read idioms; the
+ * + live value + its StatusCode and source/server timestamps). Mirrors mimir's {@code OpcUaMixerBrowser} browse + DataType-read idioms; the
  * difference is that muninn browses an INSTANCE and additionally reads each member's live VALUE
  * (and does NOT need EURange).
  *
@@ -71,12 +72,18 @@ public final class OpcUaInstanceBrowser {
 
             int dataTypeId = readDataTypeId(client, memberNode);
             MetricDataType type = UaMetricTypes.of(dataTypeId); // CF-V
-            Object value = client.readValue(0.0, TimestampsToReturn.Both, memberNode)
-                    .getValue().getValue();
+            DataValue dv = client.readValue(0.0, TimestampsToReturn.Both, memberNode);
 
-            samples.add(new SampledMember(name, type, value));
+            samples.add(new SampledMember(name, type, dv.getValue().getValue(),
+                    dv.getStatusCode() != null ? dv.getStatusCode().getValue() : 0L,
+                    epochMillis(dv.getSourceTime()), epochMillis(dv.getServerTime())));
         }
         return samples;
+    }
+
+    /** A DataValue timestamp in epoch milliseconds; {@code null} when the server returned none. */
+    static Long epochMillis(DateTime t) {
+        return t == null || t.isNull() ? null : t.getJavaTime();
     }
 
     /** Read the member's DataType attribute → numeric NodeId identifier. */

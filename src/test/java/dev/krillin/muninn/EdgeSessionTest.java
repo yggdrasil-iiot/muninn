@@ -111,8 +111,8 @@ class EdgeSessionTest {
     }
 
     private static final List<SampledMember> SAMPLE = List.of(
-            new SampledMember("Rpm", MetricDataType.Double, 1535.0),
-            new SampledMember("Running", MetricDataType.Boolean, true));
+            new SampledMember("Rpm", MetricDataType.Double, 1535.0, 0L, null, null),
+            new SampledMember("Running", MetricDataType.Boolean, true, 0L, null, null));
 
     private int verifications;
 
@@ -247,8 +247,8 @@ class EdgeSessionTest {
     void sessionStillDropsNonConformantMembers() throws Exception {
         Recording t = new Recording();
         new EdgeSession(t, verifier(null), () -> List.of(
-                new SampledMember("Rpm", MetricDataType.String, "1535"),
-                new SampledMember("Running", MetricDataType.Boolean, true)), "g", "e", null)
+                new SampledMember("Rpm", MetricDataType.String, "1535", 0L, null, null),
+                new SampledMember("Running", MetricDataType.Boolean, true, 0L, null, null)), "g", "e", null)
                 .run(new LinkedBlockingQueue<>(), 1, 1);
         assertEquals(List.of("Running"), t.published("NDATA").get(0).names());
     }

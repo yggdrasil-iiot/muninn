@@ -145,7 +145,7 @@ public final class MuninnMain {
         final String bogus = injectBogus;
         List<SampledMember> injected = raw.stream()
                 .map(s -> bogus != null && bogus.equals(s.name())
-                        ? new SampledMember(s.name(), MetricDataType.String, s.value())
+                        ? s.withType(MetricDataType.String)
                         : s)
                 .toList();
 
@@ -204,7 +204,7 @@ public final class MuninnMain {
         c.connect();
         EdgeSession.Sampler sampler = () -> OpcUaInstanceBrowser.sample(c, nsUri, instanceNodeIdent).stream()
                 .map(s -> injectBogus != null && injectBogus.equals(s.name())
-                        ? new SampledMember(s.name(), MetricDataType.String, s.value())
+                        ? s.withType(MetricDataType.String)
                         : s)
                 .toList();
 

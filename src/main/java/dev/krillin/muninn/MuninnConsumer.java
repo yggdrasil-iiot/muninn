@@ -14,6 +14,7 @@ import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.eclipse.tahu.message.SparkplugBPayloadDecoder;
 import org.eclipse.tahu.message.model.Metric;
+import org.eclipse.tahu.message.model.PropertySet;
 import org.eclipse.tahu.message.model.SparkplugBPayload;
 
 /**
@@ -91,6 +92,26 @@ public final class MuninnConsumer implements MqttCallback {
         return metric.getName() + "=" + metric.getValue();
     }
 
+    /**
+     * Renders a sample metric's OPC-UA metadata for the gate:
+     * {@code [OBSERVE] sample <name> quality=<n> ua_statuscode=0x<8 hex> ts=<ms> server=<ms>},
+     * with {@code -} for anything the metric does not carry.
+     */
+    static String metadataLine(Metric metric) {
+        PropertySet p = metric.getProperties();
+        Object quality = p == null || p.getPropertyValue(SparkplugCodec.QUALITY) == null ? null
+                : p.getPropertyValue(SparkplugCodec.QUALITY).getValue();
+        Object code = p == null || p.getPropertyValue(SparkplugCodec.UA_STATUSCODE) == null ? null
+                : p.getPropertyValue(SparkplugCodec.UA_STATUSCODE).getValue();
+        Object server = p == null || p.getPropertyValue(SparkplugCodec.UA_SERVER_TIMESTAMP) == null ? null
+                : p.getPropertyValue(SparkplugCodec.UA_SERVER_TIMESTAMP).getValue();
+        return "[OBSERVE] sample " + metric.getName()
+                + " quality=" + (quality == null ? "-" : quality)
+                + " ua_statuscode=" + (code == null ? "-" : String.format("0x%08X", ((Number) code).longValue()))
+                + " ts=" + (metric.getTimestamp() == null ? "-" : metric.getTimestamp().getTime())
+                + " server=" + (server == null ? "-" : server);
+    }
+
     @Override
     public void connectionLost(Throwable cause) {
         // no-op
@@ -133,6 +154,7 @@ public final class MuninnConsumer implements MqttCallback {
                 System.out.flush();
             }
             for (Metric metric : payload.getMetrics()) {
+                System.out.println(metadataLine(metric));
                 Files.write(ndataOutFile, (metric.getName() + "\n").getBytes(),
                         StandardOpenOption.APPEND);
                 if (valuesOutFile != null) {

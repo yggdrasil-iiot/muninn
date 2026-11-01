@@ -1,10 +1,15 @@
 package dev.krillin.muninn;
 
+import java.math.BigInteger;
 import java.util.Date;
 import java.util.List;
 
 import org.eclipse.tahu.message.model.Metric.MetricBuilder;
 import org.eclipse.tahu.message.model.MetricDataType;
+import org.eclipse.tahu.message.model.PropertyDataType;
+import org.eclipse.tahu.message.model.PropertySet;
+import org.eclipse.tahu.message.model.PropertySet.PropertySetBuilder;
+import org.eclipse.tahu.message.model.PropertyValue;
 import org.eclipse.tahu.message.model.SparkplugBPayload;
 import org.eclipse.tahu.message.model.SparkplugBPayload.SparkplugBPayloadBuilder;
 
@@ -17,6 +22,13 @@ import org.eclipse.tahu.message.model.SparkplugBPayload.SparkplugBPayloadBuilder
  * {@code semanticId}/range), so it cannot be byte-equal. Instead the raw verified
  * bytes ride in a dedicated {@link MetricDataType#Bytes} metric named
  * {@link #GOVERNED_DEFINITION}, which protobuf-round-trips byte-exact.
+ *
+ * <p>Every sample metric (DBIRTH, NDATA, DDATA) carries its OPC-UA metadata: the metric
+ * {@code timestamp} is the OPC-UA source timestamp, never the send time (the payload
+ * {@code timestamp} is the send time), and is omitted when the server returned none. Properties:
+ * {@link #QUALITY} (the Sparkplug 3.0 well-known property, a lossy projection, see
+ * {@link #quality}), {@link #UA_STATUSCODE} (the raw 32-bit StatusCode, lossless) and
+ * {@link #UA_SERVER_TIMESTAMP} (omitted when the server returned none).
  */
 public final class SparkplugCodec {
 
@@ -29,7 +41,38 @@ public final class SparkplugCodec {
     /** Sparkplug 3.0 node control metric every NBIRTH carries ({@code false}); NCMD {@code true} asks for a rebirth. */
     public static final String REBIRTH = "Node Control/Rebirth";
 
+    /** Sparkplug 3.0 well-known metric property: Int32, 192 GOOD / 0 BAD / 500 STALE. */
+    public static final String QUALITY = "Quality";
+
+    /** Raw 32-bit OPC-UA StatusCode (UInt32): severity, sub-code and flag bits, no loss. */
+    public static final String UA_STATUSCODE = "ua_statuscode";
+
+    /** OPC-UA server timestamp in epoch milliseconds (UInt64). */
+    public static final String UA_SERVER_TIMESTAMP = "ua_server_timestamp";
+
+    static final int QUALITY_GOOD = 192;
+    static final int QUALITY_BAD = 0;
+    static final int QUALITY_STALE = 500;
+
     private SparkplugCodec() {
+    }
+
+    /**
+     * Project a StatusCode onto the Sparkplug {@code Quality} property, the same rule as the
+     * predecessor lab's {@code UaSideChannel}: severity Bad or reserved is BAD;
+     * {@code Uncertain_LastUsableValue} (info bits ignored) is STALE; Good and every other
+     * Uncertain code is GOOD, because Sparkplug 3.0 has no Uncertain value. The truth stays in
+     * {@link #UA_STATUSCODE}.
+     */
+    static int quality(long statusCode) {
+        long severity = statusCode & 0xC0000000L;
+        if (severity == 0x80000000L || severity == 0xC0000000L) {
+            return QUALITY_BAD;
+        }
+        if ((statusCode & 0xFFFF0000L) == 0x40900000L) {
+            return QUALITY_STALE;
+        }
+        return QUALITY_GOOD;
     }
 
     /**
@@ -93,8 +136,22 @@ public final class SparkplugCodec {
     private static SparkplugBPayload buildSamples(List<SampledMember> conformant, long seq) throws Exception {
         SparkplugBPayloadBuilder b = new SparkplugBPayloadBuilder().setTimestamp(new Date()).setSeq(seq);
         for (SampledMember s : conformant) {
-            b.addMetric(new MetricBuilder(s.name(), s.type(), s.value()).createMetric());
+            b.addMetric(new MetricBuilder(s.name(), s.type(), s.value())
+                    .timestamp(s.sourceTimestamp() != null ? new Date(s.sourceTimestamp()) : null)
+                    .properties(sampleProperties(s))
+                    .createMetric());
         }
         return b.createPayload();
+    }
+
+    private static PropertySet sampleProperties(SampledMember s) throws Exception {
+        PropertySetBuilder p = new PropertySetBuilder()
+                .addProperty(QUALITY, new PropertyValue<>(PropertyDataType.Int32, quality(s.statusCode())))
+                .addProperty(UA_STATUSCODE, new PropertyValue<>(PropertyDataType.UInt32, s.statusCode()));
+        if (s.serverTimestamp() != null) {
+            p.addProperty(UA_SERVER_TIMESTAMP, new PropertyValue<>(PropertyDataType.UInt64,
+                    BigInteger.valueOf(s.serverTimestamp())));
+        }
+        return p.createPropertySet();
     }
 }

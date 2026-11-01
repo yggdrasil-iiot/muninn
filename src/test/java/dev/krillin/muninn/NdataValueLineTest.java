@@ -28,7 +28,7 @@ class NdataValueLineTest {
     @Test
     void valueSurvivesSparkplugRoundTripThenRenders() throws Exception {
         SparkplugBPayload ndata = SparkplugCodec.buildNdata(
-                List.of(new SampledMember("Rpm", MetricDataType.Double, 1500.0)), 1L);
+                List.of(new SampledMember("Rpm", MetricDataType.Double, 1500.0, 0L, null, null)), 1L);
         byte[] wire = new SparkplugBPayloadEncoder().getBytes(ndata, false);
         SparkplugBPayload decoded = new SparkplugBPayloadDecoder().buildFromByteArray(wire, null);
 

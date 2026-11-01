@@ -80,11 +80,25 @@ With `--primary-host <hostId>`, the session subscribes to `spBv1.0/STATE/<hostId
 
 One thread owns every decision: MQTT callbacks and the shutdown hook only queue events (rebirth, host state, lost connection, stop), and the session loop takes them between data cycles. A rebirth or a host going offline never interleaves with a publish.
 
+## Sample quality and timestamps
+
+Muninn preserves the entire OPC UA DataValue for every instance member rather than just the value. Every sample metric published in DBIRTH, NDATA, and DDATA includes explicit OPC UA quality metadata alongside requested source and server timestamps.
+
+| Field | Type | Rule |
+| :--- | :--- | :--- |
+| `Quality` | Int32 | Sparkplug B 3.0 well-known property: 0 (BAD) when StatusCode severity is Bad or reserved; 500 (STALE) for `Uncertain_LastUsableValue`; 192 (GOOD) for Good and all other Uncertain codes. Always present. |
+| `ua_statuscode` | UInt32 | Raw 32-bit StatusCode containing all severity, sub-code, and flag bits. Always present. |
+| `ua_server_timestamp` | UInt64 | OPC UA server timestamp in epoch milliseconds. Omitted when the server returns none. |
+| `timestamp` | UInt64 | Metric timestamp carrying the OPC UA source timestamp in epoch milliseconds. Omitted when the server returns none; never populated with the send time. |
+
+Downstream consumers requiring exact status codes should read `ua_statuscode`, while `Quality` offers a lossy projection for standard Sparkplug tooling. The payload-level timestamp continues to reflect the transmission time.
+
 ## Acceptance gate
 
 `scripts/run-muninn-gate.sh` composes a HiveMQ CE broker (Docker), the Bifrost sim's OPC-UA server, and Bifrost's `gates` jar to prove, end to end:
 - byte-exact NBIRTH;
 - all members reach NDATA;
+- every member (Rpm, Temp, Running, Secret) arrives with Quality 192, ua_statuscode 0, a source timestamp and a server timestamp from the live sim;
 - a bogus member is dropped by egress-validation;
 - a tampered registry is refused (exit 1);
 - with `--hierarchy` against a mapping release Bifrost published (committed under `src/test/resources/bifrost-mappings`, Bifrost's own synthetic plant), the NBIRTH stays byte-identical and all members arrive as DDATA on device `synthetic-site:record-line-a`;
