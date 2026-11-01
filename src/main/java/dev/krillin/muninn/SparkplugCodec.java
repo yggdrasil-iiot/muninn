@@ -23,7 +23,40 @@ public final class SparkplugCodec {
     /** Name of the {@code Bytes} metric that carries the governed definition's exact bytes. */
     public static final String GOVERNED_DEFINITION = "governed_definition";
 
+    /** Sparkplug 3.0 birth/death sequence metric: same value in the CONNECT Will (NDEATH) and NBIRTH. */
+    public static final String BD_SEQ = "bdSeq";
+
+    /** Sparkplug 3.0 node control metric every NBIRTH carries ({@code false}); NCMD {@code true} asks for a rebirth. */
+    public static final String REBIRTH = "Node Control/Rebirth";
+
     private SparkplugCodec() {
+    }
+
+    /**
+     * Session NBIRTH ({@code seq == 0}): the {@link #GOVERNED_DEFINITION} metric with the same exact
+     * bytes as {@link #buildNbirth}, then {@link #BD_SEQ} (Int64) and {@link #REBIRTH} ({@code false}),
+     * both required by Sparkplug 3.0 for a node that keeps its session.
+     */
+    public static SparkplugBPayload buildSessionNbirth(byte[] defBytes, long bdSeq) throws Exception {
+        return new SparkplugBPayloadBuilder().setTimestamp(new Date()).setSeq(0L)
+                .addMetric(new MetricBuilder(GOVERNED_DEFINITION, MetricDataType.Bytes, defBytes).createMetric())
+                .addMetric(new MetricBuilder(BD_SEQ, MetricDataType.Int64, bdSeq).createMetric())
+                .addMetric(new MetricBuilder(REBIRTH, MetricDataType.Boolean, false).createMetric())
+                .createPayload();
+    }
+
+    /** NDEATH: the {@link #BD_SEQ} metric only, and no {@code seq} (Sparkplug 3.0 forbids one). */
+    public static SparkplugBPayload buildNdeath(long bdSeq) throws Exception {
+        return new SparkplugBPayloadBuilder().setTimestamp(new Date())
+                .addMetric(new MetricBuilder(BD_SEQ, MetricDataType.Int64, bdSeq).createMetric())
+                .createPayload();
+    }
+
+    /** NCMD a Primary Host sends to ask for a rebirth: {@link #REBIRTH} = {@code true}. */
+    public static SparkplugBPayload buildRebirthCommand() throws Exception {
+        return new SparkplugBPayloadBuilder().setTimestamp(new Date())
+                .addMetric(new MetricBuilder(REBIRTH, MetricDataType.Boolean, true).createMetric())
+                .createPayload();
     }
 
     /**
