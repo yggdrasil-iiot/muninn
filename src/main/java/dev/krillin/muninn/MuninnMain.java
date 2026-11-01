@@ -14,6 +14,7 @@ import org.eclipse.tahu.message.model.MetricDataType;
  * <pre>
  *   feed    &lt;registryDir&gt; &lt;ref&gt; &lt;version&gt; &lt;opcEndpoint&gt; &lt;nsUri&gt; &lt;instanceNodeIdent&gt;
  *           &lt;mqttUrl&gt; &lt;group&gt; &lt;edge&gt; [--inject-bogus &lt;member&gt;]
+ *           [--hierarchy &lt;mappingsDir&gt; &lt;stream&gt; &lt;equipmentInstanceId&gt;]
  *   observe &lt;mqttUrl&gt; &lt;group&gt; &lt;birthOutFile&gt; &lt;ndataOutFile&gt;
  *           [--expect-ndata N] [--timeout-ms M]
  * </pre>
@@ -60,9 +61,13 @@ public final class MuninnMain {
         String edge = args[9];
 
         String injectBogus = null;
+        String[] hierarchy = null;
         for (int i = 10; i < args.length; i++) {
             if ("--inject-bogus".equals(args[i]) && i + 1 < args.length) {
                 injectBogus = args[++i];
+            } else if ("--hierarchy".equals(args[i]) && i + 3 < args.length) {
+                hierarchy = new String[] {args[i + 1], args[i + 2], args[i + 3]};
+                i += 3;
             } else {
                 System.err.println("unknown argument: " + args[i]);
                 usage();
@@ -77,6 +82,17 @@ public final class MuninnMain {
         } catch (ProvenanceException e) {
             System.err.println("[MUNINN] refuse: " + e.getMessage());
             System.exit(1);
+        }
+
+        // 1b. Optional ISA-95 location — resolved and verified before any connect, like provenance.
+        String device = null;
+        if (hierarchy != null) {
+            try {
+                device = HierarchyLocator.locate(Path.of(hierarchy[0]), hierarchy[1], hierarchy[2]);
+            } catch (ProvenanceException e) {
+                System.err.println("[MUNINN] refuse: " + e.getMessage());
+                System.exit(1);
+            }
         }
 
         // 2. Re-parse the governed contract from the verified bytes.
@@ -113,10 +129,21 @@ public final class MuninnMain {
             }
         }
 
-        // 7. NDATA — only conformant samples.
-        pub.publish(MqttPublisher.topic(group, "NDATA", edge),
-                new SparkplugBPayloadEncoder().getBytes(SparkplugCodec.buildNdata(ok, 1L), false),
-                0, false);
+        // 7. Only conformant samples. Without a hierarchy: NDATA on the node, as before. With one:
+        //    the equipment is a Sparkplug device named by its ISA-95 path — DBIRTH then DDATA.
+        if (device == null) {
+            pub.publish(MqttPublisher.topic(group, "NDATA", edge),
+                    new SparkplugBPayloadEncoder().getBytes(SparkplugCodec.buildNdata(ok, 1L), false),
+                    0, false);
+        } else {
+            pub.publish(MqttPublisher.topic(group, "DBIRTH", edge, device),
+                    new SparkplugBPayloadEncoder().getBytes(SparkplugCodec.buildDbirth(ok, 1L), false),
+                    0, false);
+            pub.publish(MqttPublisher.topic(group, "DDATA", edge, device),
+                    new SparkplugBPayloadEncoder().getBytes(SparkplugCodec.buildDdata(ok, 2L), false),
+                    0, false);
+            System.out.println("[MUNINN] device " + device);
+        }
         System.out.println("[MUNINN] birthed " + v.bytes().length + " def bytes; published "
                 + ok.size() + "/" + injected.size() + " members");
 
@@ -165,7 +192,8 @@ public final class MuninnMain {
     private static void usage() {
         System.err.println("Usage:");
         System.err.println("  feed <registryDir> <ref> <version> <opcEndpoint> <nsUri> "
-                + "<instanceNodeIdent> <mqttUrl> <group> <edge> [--inject-bogus <member>]");
+                + "<instanceNodeIdent> <mqttUrl> <group> <edge> [--inject-bogus <member>] "
+                + "[--hierarchy <mappingsDir> <stream> <equipmentInstanceId>]");
         System.err.println("  observe <mqttUrl> <group> <birthOutFile> <ndataOutFile> "
                 + "[--expect-ndata N] [--timeout-ms M] [--ndata-values <file>]");
     }

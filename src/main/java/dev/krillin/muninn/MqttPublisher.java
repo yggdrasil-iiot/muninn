@@ -26,6 +26,11 @@ public final class MqttPublisher {
         return "spBv1.0/" + group + "/" + msgType + "/" + edge;
     }
 
+    /** Sparkplug B device topic: {@code spBv1.0/<group>/<msgType>/<edge>/<device>}. */
+    public static String topic(String group, String msgType, String edge, String device) {
+        return topic(group, msgType, edge) + "/" + device;
+    }
+
     public void publish(String topic, byte[] bytes, int qos, boolean retained) throws Exception {
         client.publish(topic, bytes, qos, retained);
     }

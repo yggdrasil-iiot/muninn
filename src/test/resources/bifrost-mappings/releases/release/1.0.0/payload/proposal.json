@@ -1,0 +1,107 @@
+{
+  "kind": "mapping-proposal",
+  "schemaVersion": "2.23.0",
+  "id": "local-workspace",
+  "version": "2.0.0",
+  "baseRelease": null,
+  "files": [
+    {
+      "path": "hierarchy/0.json",
+      "kind": "equipment-hierarchy",
+      "id": "synthetic-plant",
+      "version": "1.0.0",
+      "sha256": "cecb1673669d6d149c565bd9c73e5a448ad2b2bcbcefafc0ed9f8dbafcf0b1b7"
+    },
+    {
+      "path": "evidence/hierarchy-0.json",
+      "kind": "evidence-artifact",
+      "id": "hierarchy-plant-register",
+      "version": "1.0.0",
+      "sha256": "8b67e7d51e7e67b5fd597cfa23168d68f19f1a047385b775a3ceb0e62a80d47c"
+    },
+    {
+      "path": "evidence/1.json",
+      "kind": "evidence-artifact",
+      "id": "manual-mixed-baseline",
+      "version": "1.0.0",
+      "sha256": "e20ddd3c13e608a50a6d8c3b34843193e5e67b4e6243a5ea1f23fe447421b916"
+    },
+    {
+      "path": "evidence/2.json",
+      "kind": "evidence-artifact",
+      "id": "manual-mixed-external-reference",
+      "version": "1.0.0",
+      "sha256": "50b1f8cb168f7c591ffaaadf42bbb2d60bdfc50721e1f382cb0cb29c99ead43c"
+    },
+    {
+      "path": "evidence/3.json",
+      "kind": "evidence-artifact",
+      "id": "manual-mixed-line-code",
+      "version": "1.0.0",
+      "sha256": "917642dd4838b4a706d2089a2f8fb205ac704edb89e0dbc4b86aeaad0132503f"
+    },
+    {
+      "path": "evidence/0.json",
+      "kind": "evidence-artifact",
+      "id": "manual-mixed-plc-pressure",
+      "version": "1.0.0",
+      "sha256": "1d81f64c7ffcd49834264fb0d045892ce878f123a3d6e27d889caa3d35098718"
+    },
+    {
+      "path": "records/evidence-2.json",
+      "kind": "evidence-artifact",
+      "id": "record-broadcast-pumps-1-0-0",
+      "version": "1.0.0",
+      "sha256": "2a1d95421999fd6118e0a01b2b331ad4424155e56ea92dff55f0509dee2fc4d8"
+    },
+    {
+      "path": "mappingTemplates/1.json",
+      "kind": "mapping-template",
+      "id": "broadcast-pump-kit",
+      "version": "1.0.0",
+      "sha256": "c0444108b7f4e17fd6d42e36da035c448d292b39d270edc5cf515d55df4036c6"
+    },
+    {
+      "path": "records/2.json",
+      "kind": "record-mapping",
+      "id": "broadcast-pumps",
+      "version": "1.0.0",
+      "sha256": "469f175201e7e26a210b20f3fcc84d44705779a7fa93c143f8db755e22ad0b4c"
+    },
+    {
+      "path": "semantics/3.json",
+      "kind": "semantic-definition",
+      "id": "broadcast-model-a5718f5500986242f75268c0",
+      "version": "1.0.0",
+      "sha256": "573ea775f8068489027fc14f65059669032c6536b4335860a8e38d16ea01691d"
+    },
+    {
+      "path": "sources/1.json",
+      "kind": "source-definition",
+      "id": "mixed-baseline",
+      "version": "1.0.0",
+      "sha256": "2d054d0e3e769055b4c91eeb938f5033be19cd14e703c396f9e75ab1dd11b3f1"
+    },
+    {
+      "path": "sources/2.json",
+      "kind": "source-definition",
+      "id": "mixed-external-reference",
+      "version": "1.0.0",
+      "sha256": "2224c384914e18bf1653be19a736377795c96b1eabdb24c973de803d86e3bf16"
+    },
+    {
+      "path": "sources/3.json",
+      "kind": "source-definition",
+      "id": "mixed-line-code",
+      "version": "1.0.0",
+      "sha256": "e5a22f881c1553ed17de019819d048900bbf6424f1a20ac9562cfafda7444971"
+    },
+    {
+      "path": "sources/0.json",
+      "kind": "source-definition",
+      "id": "mixed-plc-pressure",
+      "version": "1.0.0",
+      "sha256": "3be720f7e855e474d6a28fc2ce0d3b79088d4489247d12ca8a2c11a08cb32538"
+    }
+  ]
+}
