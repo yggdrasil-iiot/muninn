@@ -1,0 +1,186 @@
+package yggdrasil.muninn;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
+import org.eclipse.paho.client.mqttv3.MqttCallback;
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
+import org.eclipse.tahu.message.SparkplugBPayloadDecoder;
+import org.eclipse.tahu.message.model.Metric;
+import org.eclipse.tahu.message.model.PropertySet;
+import org.eclipse.tahu.message.model.SparkplugBPayload;
+
+/**
+ * Paho v3 observer (gate harness) mirroring {@code SchemaResolvingConsumer}. Subscribes to a
+ * group's Sparkplug tree, captures the NBIRTH's governed-definition bytes to {@code birthOutFile}
+ * and every NDATA metric name to {@code ndataOutFile}, and counts down once a birth plus the
+ * expected number of NDATA member-lines have been seen. When an optional {@code valuesOutFile}
+ * is provided, each NDATA metric is additionally written as {@code name=value} to it. DDATA
+ * (the {@code --hierarchy} feed) is captured the same way, and its device ID is logged as
+ * {@code [OBSERVE] device <id>}. Every message is also logged as {@link #sessionLine} so the
+ * session gate can follow {@code seq} and {@code bdSeq}.
+ *
+ * <p>Both out files are truncated/created empty at construction so a prior run's captures can
+ * NEVER leak into this run's assertions. The synchronous {@code subscribe} + a flushed readiness
+ * line ({@code [OBSERVE] subscribed ...}) form the gate's readiness handshake.
+ */
+public final class MuninnConsumer implements MqttCallback {
+
+    private final Path birthOutFile;
+    private final Path ndataOutFile;
+    private final Path valuesOutFile;   // nullable: only written when the observe --ndata-values flag is set
+    private final int expectNdata;
+    private final CountDownLatch latch = new CountDownLatch(1);
+    private final SparkplugBPayloadDecoder decoder = new SparkplugBPayloadDecoder();
+    private final MqttClient sub;
+
+    private boolean birthSeen;
+    private int ndataCount;
+
+    public MuninnConsumer(String broker, String group, Path birthOutFile, Path ndataOutFile,
+            Path valuesOutFile, int expectNdata) throws Exception {
+        this.birthOutFile = birthOutFile;
+        this.ndataOutFile = ndataOutFile;
+        this.valuesOutFile = valuesOutFile;
+        this.expectNdata = expectNdata;
+
+        // Truncate/create all capture files empty so no prior run leaks in
+        // (the opt-in values file only when it is set).
+        Files.write(birthOutFile, new byte[0]);
+        Files.write(ndataOutFile, new byte[0]);
+        if (valuesOutFile != null) {
+            Files.write(valuesOutFile, new byte[0]);
+        }
+
+        MqttConnectOptions o = new MqttConnectOptions();
+        o.setCleanSession(true);
+        sub = new MqttClient(broker, "muninn-observer", new MemoryPersistence());
+        sub.setCallback(this);
+        sub.connect(o);
+        sub.subscribe("spBv1.0/" + group + "/#", 1);
+        // Readiness handshake: subscribe is synchronous, so the observer is genuinely ready here.
+        System.out.println("[OBSERVE] subscribed spBv1.0/" + group + "/#");
+        System.out.flush();
+    }
+
+    /**
+     * One line per message for the session gate: {@code [OBSERVE] <type> seq=<n> bdSeq=<n>}, each
+     * field only when the payload carries it (NDEATH has no seq; only NBIRTH and NDEATH a bdSeq).
+     */
+    static String sessionLine(String type, SparkplugBPayload payload) {
+        StringBuilder b = new StringBuilder("[OBSERVE] ").append(type);
+        if (payload.getSeq() != null) {
+            b.append(" seq=").append(payload.getSeq());
+        }
+        for (Metric metric : payload.getMetrics()) {
+            if (SparkplugCodec.BD_SEQ.equals(metric.getName())) {
+                b.append(" bdSeq=").append(metric.getValue());
+            }
+        }
+        return b.toString();
+    }
+
+    /** Renders an NDATA metric as {@code name=value} for the gate's value assertion. */
+    static String valueLine(Metric metric) {
+        return metric.getName() + "=" + metric.getValue();
+    }
+
+    /**
+     * Renders a sample metric's OPC-UA metadata for the gate:
+     * {@code [OBSERVE] sample <name> quality=<n> ua_statuscode=0x<8 hex> ts=<ms> server=<ms>},
+     * with {@code -} for anything the metric does not carry.
+     */
+    static String metadataLine(Metric metric) {
+        PropertySet p = metric.getProperties();
+        Object quality = p == null || p.getPropertyValue(SparkplugCodec.QUALITY) == null ? null
+                : p.getPropertyValue(SparkplugCodec.QUALITY).getValue();
+        Object code = p == null || p.getPropertyValue(SparkplugCodec.UA_STATUSCODE) == null ? null
+                : p.getPropertyValue(SparkplugCodec.UA_STATUSCODE).getValue();
+        Object server = p == null || p.getPropertyValue(SparkplugCodec.UA_SERVER_TIMESTAMP) == null ? null
+                : p.getPropertyValue(SparkplugCodec.UA_SERVER_TIMESTAMP).getValue();
+        return "[OBSERVE] sample " + metric.getName()
+                + " quality=" + (quality == null ? "-" : quality)
+                + " ua_statuscode=" + (code == null ? "-" : String.format("0x%08X", ((Number) code).longValue()))
+                + " ts=" + (metric.getTimestamp() == null ? "-" : metric.getTimestamp().getTime())
+                + " server=" + (server == null ? "-" : server);
+    }
+
+    @Override
+    public void connectionLost(Throwable cause) {
+        // no-op
+    }
+
+    @Override
+    public void deliveryComplete(IMqttDeliveryToken token) {
+        // no-op
+    }
+
+    @Override
+    public void messageArrived(String topic, MqttMessage m) throws Exception {
+        String[] parts = topic.split("/");
+        if (parts.length < 3) return;
+        String type = parts[2];
+
+        SparkplugBPayload payload;
+        try {
+            payload = decoder.buildFromByteArray(m.getPayload(), null);
+        } catch (Exception e) {
+            System.out.println("[OBSERVE] decode failed " + topic + ": " + e.getMessage());
+            return;
+        }
+
+        System.out.println(sessionLine(type, payload));
+        System.out.flush();
+
+        if (type.equals("NBIRTH")) {
+            for (Metric metric : payload.getMetrics()) {
+                if (SparkplugCodec.GOVERNED_DEFINITION.equals(metric.getName())) {
+                    Files.write(birthOutFile, (byte[]) metric.getValue());
+                    birthSeen = true;
+                    break;
+                }
+            }
+        } else if (type.equals("NDATA") || type.equals("DDATA")) {
+            if (type.equals("DDATA") && parts.length > 4) {
+                // Device topics carry the equipment's location path as the fifth level.
+                System.out.println("[OBSERVE] device " + parts[4]);
+                System.out.flush();
+            }
+            for (Metric metric : payload.getMetrics()) {
+                System.out.println(metadataLine(metric));
+                Files.write(ndataOutFile, (metric.getName() + "\n").getBytes(),
+                        StandardOpenOption.APPEND);
+                if (valuesOutFile != null) {
+                    Files.write(valuesOutFile, (valueLine(metric) + "\n").getBytes(),
+                            StandardOpenOption.APPEND);
+                }
+                ndataCount++;
+            }
+        }
+
+        if (birthSeen && ndataCount >= expectNdata) {
+            latch.countDown();
+        }
+    }
+
+    /** Block up to {@code timeoutMs} for a birth + expected NDATA member-lines. */
+    public boolean awaitCapture(long timeoutMs) throws InterruptedException {
+        return latch.await(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    public void close() throws Exception {
+        if (sub != null) {
+            if (sub.isConnected()) {
+                sub.disconnect();
+            }
+            sub.close();
+        }
+    }
+}
